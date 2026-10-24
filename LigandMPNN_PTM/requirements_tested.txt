@@ -1,0 +1,14 @@
+# Versions resolved in a clean venv (Python 3.12) in which all 25 tests of tests/test_ptm.py pass (N018, 2026-10-17; torch 2.14.1 installed separately).
+# torch is NOT listed: install it first (CPU wheel: pip install torch --index-url https://download.pytorch.org/whl/cpu ; GPU: the CUDA build from https://pytorch.org).
+# numpy 2.5 / scipy 1.18 need Python >= 3.12; on Python 3.10 / 3.11 install the same packages without the pins (not tested).
+absl-py==2.5.1
+attrs==26.1.0
+biopython==1.88
+dm-tree==0.1.10
+ml_collections==1.1.0
+numpy==2.5.4
+ProDy==2.6.1
+pyparsing==3.1.1
+PyYAML==6.0.3
+scipy==1.18.1
+wrapt==2.5.1

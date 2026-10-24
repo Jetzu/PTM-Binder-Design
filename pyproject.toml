@@ -1,0 +1,15 @@
+[project]
+name = "ptm-rfd3"
+version = "0.1.0"
+description = "Binder design with RFdiffusion3 against PTM / covalently modified targets (RDKit-built PTMs)"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "pandas", "pyyaml", "rdkit", "biotite"]
+
+[project.scripts]
+ptm-rfd3 = "ptm_rfd3.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ptm_rfd3*"]
+
+[tool.setuptools.package-data]
+ptm_rfd3 = ["data/*.json", "data/*.json.gz"]

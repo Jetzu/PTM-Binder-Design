@@ -1,0 +1,7 @@
+{
+  "glycosylated_scaffold": {
+    "ptm_motifs": [{"mod": "N-GlcNAc", "seq": "LNT", "pos": 2}],
+    "contig": "40-60,{motif},40-60",
+    "ptm_conformers": 1
+  }
+}

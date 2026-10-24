@@ -1,0 +1,10 @@
+{
+  "egfr_tail_custom_group": {
+    "input": "../egfr_tail_1126_1150.pdb",
+    "ptm": {"A1131": {"smiles": "*C(C)=O", "anchor": "OG1", "name": "ZAC"}},
+    "ptm_hotspots": ["patch"],
+    "ptm_conformers": 1,
+    "contig": "70-110,/0,A1126-1150",
+    "is_non_loopy": true
+  }
+}

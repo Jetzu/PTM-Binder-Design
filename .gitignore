@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+examples/*/*.cif
+examples/*/*.pdb
+examples/*/*/*.cif
+examples/*/*/*.pdb
+!examples/egfr_tail_1126_1150.pdb
+*.o[0-9]*
+slurm-*.out
