@@ -26,10 +26,11 @@ from pathlib import Path
 
 import numpy as np
 from biotite import structure as struc
-from biotite.structure import io as sio
+
 from biotite.structure.io import pdbx
 
 from . import rfd3_inputs, rfd3_run
+from . import structio as sio
 
 log = logging.getLogger("ptm_rfd3.rfd4_run")
 
