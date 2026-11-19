@@ -1,0 +1,18 @@
+# PTM burial with fold-diverse SMC (importance-corrected): the recommended starting point.
+# Use:  PTMSMC_CONFIG=examples/particle_guidance/burial_smc.yaml  (+ diffusion_batch_size = number of particles)
+policy:
+  scheme: smc            # smc | we | twe | none (record only) | fork (diagnostic)
+  start: 0.6             # scoring window on the sampler clock (0 = first step, 1 = final structure)
+  lam_max: 40            # tilt strength at the end: target = q(x) * exp(lam_max * R(x))
+  lam_power: 1.0         # tilt ramp over the window (lam = lam_max * f^lam_power)
+  cess_frac: 0.5         # adaptive tempering: never let one step drop the conditional ESS below 0.5 K
+  ess_frac: 0.5          # resample when ESS < 0.5 K
+  fold_dedup: true       # diversity-biased resampling proposal ...
+  fold_mix: 0.5          # ... 0 = plain, 1 = equal share per fold cluster; children carry W/q (target unchanged)
+  fold_thr: 2.0          # A, distance-matrix RMSD below which two particles count as the same fold + pose
+geometry:
+  mode: solid            # PTM burial as solid-angle fraction (bounded); 'count' = soft neighbour count
+terms:
+  - {name: ptm_burial, weight: 1.0}
+  - {name: peptide_overburial, weight: 0.5}
+  - {name: clash, weight: 0.1}

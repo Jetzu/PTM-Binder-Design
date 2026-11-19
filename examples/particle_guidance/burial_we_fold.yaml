@@ -1,0 +1,7 @@
+# Tilted weighted ensemble with one bin per fold cluster: no fold present at a resampling step can be lost.
+policy: {scheme: twe, start: 0.6, lam_max: 40, cess_frac: 0.5, we_bin_by: fold, we_every: 4}
+geometry: {mode: solid}
+terms:
+  - {name: ptm_burial, weight: 1.0}
+  - {name: peptide_overburial, weight: 0.5}
+  - {name: clash, weight: 0.1}

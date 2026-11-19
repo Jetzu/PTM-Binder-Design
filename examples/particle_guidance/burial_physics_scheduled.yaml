@@ -1,0 +1,14 @@
+# PTM burial + PTM-general physics terms, each with its own schedule over diffusion time.
+policy: {scheme: smc, start: 0.55, lam_max: 40, cess_frac: 0.5, fold_dedup: true, fold_mix: 0.5}
+geometry: {mode: solid, n_dir: 64, ray_len: 10.0, ray_r: 2.5}
+physics: {a0: 15.0, r_cut: 12.0, unsat_burial: 0.5, hb_d: 3.5, pol_cb_d: 7.5}
+terms:
+  - {name: ptm_burial, weight: 1.0}                                  # primary, whole window
+  - {name: contact_share, weight: 0.3,                               # binding concentrated on the modification
+     schedule: {start: 0.55, stop: 1.0, shape: linear}}
+  - {name: electrostatics, weight: 0.01,                             # side-chain charges only mean something late
+     schedule: {start: 0.7, shape: cosine}, normalize: {mode: none, clip: [-40, 40]}}
+  - {name: solvation, weight: 0.05, schedule: {start: 0.7}}
+  - {name: unsat_polar, weight: 0.2, schedule: {start: 0.75, shape: linear}}
+  - {name: clash, weight: 0.1}
+  - {name: compactness, weight: 0.2}

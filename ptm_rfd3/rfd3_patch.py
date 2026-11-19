@@ -225,6 +225,11 @@ def main() -> None:
     sys.argv = [sys.argv[0]] + preprocess_argv(sys.argv[1:])      # PTM building happens BEFORE RFD3 starts
     if os.environ.get("PTM_RFD3_NO_PATCH") != "1":                # =1 only for ablation benchmarks: stock bond handling
         install()
+    from . import rfd3_particles
+    if rfd3_particles.enabled():                                  # PTMSMC_SCHEME=smc|we|twe|none: particle guidance
+        out_dir = next((a.split("=", 1)[1].strip("'\"") for a in sys.argv[1:] if a.startswith("out_dir=")), ".")
+        os.environ.setdefault("PTMSMC_LOG_DIR", os.path.join(out_dir, "ptmsmc"))
+        rfd3_particles.install()
     from rfd3.run_inference import run_inference
 
     run_inference()
