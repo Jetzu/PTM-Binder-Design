@@ -58,13 +58,39 @@ def test_collect_renames_binder_to_A_and_writes_rfd3_layout(built, tmp_path):
     out.mkdir(parents=True)
     sio.write_cif(design, out / f"{name}_0_generated.cif")
     dest = tmp_path / "dest"
-    n = rfd4_run.collect(tmp_path / "rfd4_out", w, dest)
+    n = rfd4_run.collect(tmp_path / "rfd4_out", w, dest, pop_size=4)
     assert n == 1
-    meta = json.loads((dest / f"{name}_0_model_0.json").read_text())
+    meta = json.loads((dest / f"{name}_b000_model_0.json").read_text())
     assert meta["specification"]["extra"]["example"] == "egfr_pY1138_ptm_k0"
     assert meta["rfd4"]["chain_map"] == {"B": "A", "A": "B"}
     assert meta["metrics"]["n_clashing.interresidue_clashes_w_sidechain"] == 0
     from ptm_rfd3 import pipeline as P
-    a = P.read_cif_text(gzip.open(dest / f"{name}_0_model_0.cif.gz", "rt").read())
+    a = P.read_cif_text(gzip.open(dest / f"{name}_b000_model_0.cif.gz", "rt").read())
     assert set(a.chain_id[a.res_name == "PTR"]) == {"B"} and set(a.res_name[a.chain_id == "A"]) == {"ALA"}
     assert (dest / "ptm_build").is_dir()
+
+
+def test_collect_maps_guided_particles_to_populations(built, tmp_path):
+    w, info = built
+    y = yaml.safe_load(Path(info["yaml"]).read_text())
+    name = "egfr_pY1138_ptm_k0_L80"
+    tgt = sio.read_structure(y[name]["input"])
+    binder = tgt[np.isin(tgt.atom_name, ["N", "CA", "C", "O"])].copy()
+    binder.coord = binder.coord + 25.0
+    binder.chain_id[:] = "B"; binder.res_name[:] = "ALA"; binder.hetero[:] = False
+    from biotite import structure as struc
+    design = struc.concatenate([tgt, binder])
+    out = tmp_path / "rfd4_out"
+    for i in (5, 6):
+        d = out / f"{name}_{i}"
+        d.mkdir(parents=True)
+        sio.write_cif(design, d / f"{name}_{i}_generated.cif")
+    (out / "ptmsmc").mkdir()
+    log = {"example_ids": [f"{name}_4", f"{name}_5", f"{name}_6", f"{name}_7"], "policy": {"scheme": "smc"},
+           "weights": [0.1, 0.2, 0.3, 0.4], "ancestry": [0, 0, 2, 3], "lam": 5.0, "terms": {"reward": [1, 2, 3, 4]}}
+    (out / "ptmsmc" / "rfd4_call0000.ptmsmc.json").write_text(json.dumps(log))
+    dest = tmp_path / "dest"
+    assert rfd4_run.collect(out, w, dest, pop_size=4) == 2
+    m5 = json.loads((dest / f"{name}_b000_model_1.json").read_text())
+    m6 = json.loads((dest / f"{name}_b000_model_2.json").read_text())
+    assert m5["ptmsmc"]["weight"] == 0.2 and m5["ptmsmc"]["lineage"] == 0 and m6["ptmsmc"]["reward"] == 3.0

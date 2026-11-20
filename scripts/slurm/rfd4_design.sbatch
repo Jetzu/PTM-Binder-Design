@@ -43,7 +43,7 @@ $AP exec --nv --cleanenv --pwd $T --bind "$REPO,$W,$T,$(dirname $SPECS),$WEIGHTS
   source $T/work/rfd4_env.sh; echo \"### PTMSMC_PTM_ATOMS=\$PTMSMC_PTM_ATOMS PTMSMC_SCHEME=\${PTMSMC_SCHEME:-<off>}\"
   python -m ptm_rfd3.rfd4_particles hf_ckpt_path=/weights/rfd4-proteina/bundle inputs=$T/work/rfd4_specs.yaml out_dir=$T/rfd4_out \
       num_replicates=$NREP batch_size=$BS seed=$SEED ${EXTRA:-}
-  python -m ptm_rfd3.rfd4_run collect $T/rfd4_out $T/work $T/out
+  python -m ptm_rfd3.rfd4_run collect $T/rfd4_out $T/work $T/out --pop-size $BS
   mkdir -p $T/out/ptmsmc; cp -r $T/rfd4_out/ptmsmc/. $T/out/ptmsmc/ 2>/dev/null || true
 " 2>&1 | grep -vE "MIRROR|VAR_NAME|env file|^  \(" | tee $T/design.log | tail -60
 RC=${PIPESTATUS[0]}

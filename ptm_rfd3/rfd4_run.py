@@ -115,8 +115,12 @@ def clash_count(a: struc.AtomArray, binder_chain: str, scale: float = 0.75) -> i
     return int((d < scale * (rb[:, None] + rt[None])).sum())
 
 
-def collect(rfd4_out: str | Path, work_dir: str | Path, dest: str | Path) -> int:
-    """RFD4 designs -> RFD3 layout for `ptm-rfd3 stage --keep-sequence`. Returns the number of designs written."""
+def collect(rfd4_out: str | Path, work_dir: str | Path, dest: str | Path, pop_size: int = 0) -> int:
+    """RFD4 designs -> RFD3 layout for `ptm-rfd3 stage --keep-sequence`. Returns the number of designs written.
+    Output names are `<example>_b<population>_model_<row>` (as RFD3 batches): with particle-guidance logs the population
+    and row come from the log (which example ids a full_simulation call held); otherwise replicate i is row i % pop_size of
+    population i // pop_size (pop_size = the RFD4 batch size; 0 = one population per example). Guided designs get the
+    per-particle `ptmsmc` entry (weight, lineage, reward terms) like RFD3 outputs."""
     src, work, dst = Path(rfd4_out), Path(work_dir), Path(dest)
     dst.mkdir(parents=True, exist_ok=True)
     index = json.loads((work / "rfd4_index.json").read_text())
@@ -125,6 +129,12 @@ def collect(rfd4_out: str | Path, work_dir: str | Path, dest: str | Path) -> int
     logs = {}
     for lp in sorted(Path(src).rglob("*.ptmsmc.json")):
         logs[lp.name] = json.loads(lp.read_text())
+    where = {}                                                   # example id -> (population, row, per-particle info)
+    for k, lg in enumerate(logs[x] for x in sorted(logs)):
+        for row, eid in enumerate(lg.get("example_ids") or []):
+            info = dict(scheme=lg["policy"]["scheme"], weight=float(lg["weights"][row]), lineage=int(lg["ancestry"][row]),
+                        lam=float(lg.get("lam", 0.0)), **{t: float(v[row]) for t, v in lg["terms"].items()})
+            where[str(eid)] = (k, row, info)
     n = 0
     files = sorted(p for p in src.rglob("*_generated.cif*") if p.suffix in (".cif", ".zst", ".gz"))
     for i, p in enumerate(files):
@@ -147,7 +157,12 @@ def collect(rfd4_out: str | Path, work_dir: str | Path, dest: str | Path) -> int
         a.chain_id = np.array([ren[c] for c in a.chain_id])
         order = np.argsort([0 if c == "A" else 1 for c in a.chain_id], kind="stable")
         a = a[order]
-        name = f"{did}_model_0"
+        if did in where:
+            pop, row, info = where[did]
+        else:
+            rep_i = int(m.group(1)) if (m := re.search(r"_(\d+)$", did)) else 0
+            pop, row, info = (rep_i // pop_size, rep_i % pop_size, None) if pop_size else (0, rep_i, None)
+        name = f"{base}_b{pop:03d}_model_{row}"
         f = pdbx.CIFFile()
         pdbx.set_structure(f, a)
         import io
@@ -157,7 +172,9 @@ def collect(rfd4_out: str | Path, work_dir: str | Path, dest: str | Path) -> int
             fh.write(buf.getvalue())
         meta = {"specification": {"extra": {"example": index[base]["spec_key"]}},
                 "metrics": {"n_clashing.interresidue_clashes_w_sidechain": clash_count(a, "A")},
-                "rfd4": {"source": str(p), "example": base, "chain_map": ren}}
+                "rfd4": {"source": str(p), "example": base, "design_id": did, "chain_map": ren}}
+        if info is not None:
+            meta["ptmsmc"] = info
         (dst / f"{name}.json").write_text(json.dumps(meta, indent=1))
         n += 1
     if logs:
@@ -174,12 +191,13 @@ def main(argv=None) -> None:
     a.add_argument("--n-confs", type=int, default=300)
     c = sub.add_parser("collect")
     c.add_argument("rfd4_out"); c.add_argument("work_dir"); c.add_argument("dest")
+    c.add_argument("--pop-size", type=int, default=0, help="RFD4 batch size (population) for unguided runs")
     args = ap.parse_args(argv)
     if args.cmd == "inputs":
         ls = [int(v) for v in args.lengths.split(",") if v.strip()] or None
         print(json.dumps(make_inputs(args.spec, args.work_dir, ls, n_confs=args.n_confs), indent=1))
     else:
-        print(json.dumps({"designs": collect(args.rfd4_out, args.work_dir, args.dest)}))
+        print(json.dumps({"designs": collect(args.rfd4_out, args.work_dir, args.dest, pop_size=args.pop_size)}))
 
 
 if __name__ == "__main__":
