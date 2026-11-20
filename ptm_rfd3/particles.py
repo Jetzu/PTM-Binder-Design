@@ -64,6 +64,8 @@ class ParticlePolicy:
     fold_correct: bool = True     # smc: each child carries log W_parent - log q_parent, so the weighted population still
                                   # targets q_RFD3 * exp(lam r) (importance-corrected); False = reset weights (biased, old)
     fold_thr: float = 2.0         # distance-matrix RMSD (A) below which two particles are the same fold + pose (N002 calibration: resampled siblings 0.3-1.3 A, distinct designs >= 2.7 A)
+    chunk: int = 0                # > 0: the generator's denoiser is called on chunks of this many particles (memory); the
+                                  # population (resampling) still spans all n_particles
 
     def __post_init__(self):
         if self.scheme not in SCHEMES:
@@ -82,6 +84,8 @@ class ParticlePolicy:
             raise ValueError("ess_frac and cess_frac must be in [0, 1]")
         if self.max_offspring and not 1 <= self.max_offspring <= self.n_particles // self.islands:
             raise ValueError("max_offspring must be 0 or in [1, particles per island]")
+        if self.chunk < 0:
+            raise ValueError("chunk must be >= 0")
         if self.lam_max < 0 or self.lam_power <= 0:
             raise ValueError("lam_max >= 0 and lam_power > 0 required")
 

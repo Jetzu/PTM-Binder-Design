@@ -152,10 +152,24 @@ class _Proxy:
     def __getattr__(self, name):
         return getattr(self.m, name)
 
+    def _forward(self, *args, X_noisy_L, f, **kw):
+        """The denoiser call, optionally in chunks of policy.chunk particles (rows are independent given the shared f;
+        per-row arguments are X_noisy_L and the tiled t)."""
+        D = X_noisy_L.shape[0]
+        ch = self.engine.policy.chunk
+        if not ch or D <= ch:
+            return self.m(*args, X_noisy_L=X_noisy_L, f=f, **kw)
+        t = kw.pop("t")
+        parts = [self.m(*args, X_noisy_L=X_noisy_L[i:i + ch], f=f, t=t[i:i + ch], **kw) for i in range(0, D, ch)]
+        if isinstance(parts[0], dict):
+            return {k: (torch.cat([q[k] for q in parts], 0) if torch.is_tensor(parts[0][k]) and parts[0][k].ndim
+                        and parts[0][k].shape[0] == X_noisy_L[:ch].shape[0] else parts[0][k]) for k in parts[0]}
+        return torch.cat(parts, 0)
+
     def __call__(self, *args, X_noisy_L, f, **kw):
-        outs = self.m(*args, X_noisy_L=X_noisy_L, f=f, **kw)
         if f is not self.f_main:  # CFG reference pass
-            return outs
+            return self._forward(*args, X_noisy_L=X_noisy_L, f=f, **kw)
+        outs = self._forward(*args, X_noisy_L=X_noisy_L, f=f, **kw)
         step = self.k
         self.k += 1
         progress = (step + 1) / self.nsteps

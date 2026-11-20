@@ -240,3 +240,24 @@ def test_smc_fold_dedup_is_importance_corrected(dedup, mix):
     assert abs(float(w[fold == 1].sum()) - 0.15) < 0.04
     if dedup:                                               # survivors spread: the minority fold holds many more slots
         assert float((fold == 1).double().mean()) > (0.4 if mix == 1.0 else 0.25)
+
+
+def test_rfd3_proxy_chunking_is_exact():
+    """The RFD3 proxy's chunked denoiser call returns exactly the unchunked outputs (rows are independent)."""
+    from ptm_rfd3.rfd3_particles import _Proxy
+
+    class Fake:
+        def __call__(self, X_noisy_L, f, t, **kw):
+            return {"X_L": X_noisy_L * 2 + t[:, None, None], "sequence_logits_I": X_noisy_L.mean(1, keepdim=True).expand(-1, 4, 3),
+                    "shared": torch.ones(5)}
+
+    X = torch.randn(10, 6, 3)
+    t = torch.arange(10.0)
+    f = {}
+    full = Fake()(X_noisy_L=X, f=f, t=t)
+    for ch in (0, 3, 4, 10):
+        eng = ParticleEngine(ParticlePolicy(scheme="none", n_particles=10, chunk=ch))
+        px = _Proxy(Fake(), object(), eng, None, None, 10, 5)
+        out = px._forward(X_noisy_L=X, f=f, t=t)
+        assert torch.equal(out["X_L"], full["X_L"]) and torch.equal(out["sequence_logits_I"], full["sequence_logits_I"])
+        assert torch.equal(out["shared"], full["shared"])
