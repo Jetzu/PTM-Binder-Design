@@ -581,7 +581,7 @@ Look at the **whole distribution** of `d_tm` (`score` prints its median with a b
 ## What was done & performance
 
 **Scope.** A complete RFD3 → LigandMPNN → AF3 funnel for modified targets, developed and benchmarked on the **EGFR C-terminal tail with phospho-Tyr1138** (25 residues) and exercised on two structured
-domains (9bjc pThr161, 7w7y pTyr165). The code went through independent review rounds (every finding reproduced before it was fixed). Everything is **in-silico**:
+domains (9bjc pThr161, 7w7y pTyr165). The code went through independent review rounds (every finding reproduced before it was fixed; the newer [RFD4 and particle guidance](#rfd4-and-particle-guidance) additions have not been through such a round yet). Everything is **in-silico**:
 binders are judged by AF3 co-folds, nothing has been tested in the lab.
 
 | Stage | What was measured | Result |
