@@ -64,7 +64,8 @@ def _terms(reward, X, masks, outs=None, progress: float = 1.0):
     if torch.is_tensor(logits) and logits.ndim == 3:
         probs = torch.softmax(logits[..., :20].float(), -1).index_select(1, r["tok"].to(logits.device))
     return reward.evaluate(X, masks["ptm"], masks["other"], masks["binder"], chem=masks.get("chem"), ca_idx=r["ca_idx"],
-                           cb_idx=r["cb_idx"], bbpol_idx=r["bbpol_idx"], probs=probs, progress=progress)
+                           cb_idx=r["cb_idx"], bbpol_idx=r["bbpol_idx"], probs=probs, progress=progress,
+                           binder_all=masks.get("binder_all"))
 
 
 def _parse_ptm_atoms(spec: str) -> dict[str, set[str]]:
@@ -133,7 +134,8 @@ def build_masks(aa, device) -> dict:
         chem = ptm_chem_for(aa, np.where(ptm)[0])
     except Exception as e:  # noqa: BLE001 - physics terms are optional; burial still works
         log.warning("ptmsmc: PTM chemistry could not be derived (%s); physics terms off", e)
-    return dict(ptm=t(ptm), other=t(other), binder=t(binder), how=how, res=res, chem=chem,
+    binder_all = ~fixed & (elem != "H")                                   # every predicted binder atom incl. side-chain slots
+    return dict(ptm=t(ptm), other=t(other), binder=t(binder), binder_all=t(binder_all), how=how, res=res, chem=chem,
                 ptm_atoms=sorted({f"{c}{r}:{n}" for c, r, n in zip(np.asarray(aa.chain_id)[ptm],
                                                                     np.asarray(aa.res_id)[ptm], names[ptm])}))
 

@@ -40,6 +40,13 @@ Terms (P = PTM atoms = atoms the modification adds, Q = other target atoms, B = 
   electrostatics      -E_elec between P charges and the binder's expected side-chain charges (ptm_physics)
   unsat_polar         -(buried polar P atoms without a partner) / |polar P| (ptm_physics)
   compactness         -max(0, Rg(binder CA) / (2.2 N^0.38) - 1)
+  ptm_close_contact   -(sum over binder atoms closer than close_d to a P atom of (close_d - d) / close_d) / |P|:
+                      steric overlap WITH the modification (RFD3: all predicted binder atoms incl. side-chain slots;
+                      RFD4: CA, close_d 4.0). N006: 56 % of designs fail the pipeline gate on a binder atom <= 2.4 A from P.
+  charge_partner      per charged P atom (|q| >= 0.3): sum_j p_j(complementary) * ramp(d(charge centre_j, a)), capped at
+                      1, averaged over charged atoms; complementary = R/K (+0.5 H) for anions, D/E + 0.5 W/Y/F (aromatic
+                      cage, cation-pi) for cations; 0 for neutral PTMs. params: r_on (full credit, 5.0 A), ramp (1.5 A).
+Every term takes optional `params: {...}` in the config (passed to the term function).
 """
 from __future__ import annotations
 
@@ -117,6 +124,7 @@ class TermSpec:
     weight: float = 1.0
     schedule: Schedule = field(default_factory=Schedule)
     normalize: Normalize = field(default_factory=Normalize)
+    params: dict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict) -> "TermSpec":
@@ -133,9 +141,10 @@ class TermSpec:
 class Ctx:
     """Lazily computed shared intermediates for one batch of particles."""
 
-    def __init__(self, model, X, ptm, other, binder, chem, ca_idx, cb_idx, bbpol_idx, probs):
+    def __init__(self, model, X, ptm, other, binder, chem, ca_idx, cb_idx, bbpol_idx, probs, binder_all=None):
         self.m, self.X = model, X.detach().float()
         self.ptm, self.other, self.binder = ptm, other, binder
+        self.binder_all = binder if binder_all is None else binder_all
         self.chem, self.ca_idx, self.cb_idx, self.bbpol_idx, self.probs = chem, ca_idx, cb_idx, bbpol_idx, probs
         self._c = {}
 
@@ -191,23 +200,49 @@ class Ctx:
 
 
 def _phys(key, sign=-1.0):
-    def term(c: Ctx):
+    def term(c: Ctx, **_):
         ph = c.physics()
         return None if ph is None else sign * ph[key]
     return term
 
 
-def _burial(c: Ctx):
+def _burial(c: Ctx, **_):
     return c.bur_p() if c.m.geometry.mode == "solid" else (c.n_p() / c.m.geometry.n_sat).clamp(max=1.0)
 
 
-def _overburial(c: Ctx):
+def _overburial(c: Ctx, **_):
     if c.m.geometry.mode == "solid":
         return -(c.bur_q() - c.bur_p()).clamp_min(0.0)
     return -(c.n_q() - c.n_p()).clamp_min(0.0) / c.m.geometry.n_sat
 
 
-def _compact(c: Ctx):
+def _close_contact(c: Ctx, close_d: float = 2.6):
+    d = torch.cdist(c.P, c.X[:, c.binder_all])
+    return -((close_d - d).clamp_min(0.0) / close_d).sum((-2, -1)) / max(int(c.ptm.sum()), 1)
+
+
+def _charge_partner(c: Ctx, r_on: float = 5.0, ramp: float = 1.5, offset: float = 2.4):
+    if c.chem is None or c.ca_idx is None or c.probs is None:
+        return None
+    from .ptm_physics import AA20
+    q = c.chem.charge.to(c.X.device)
+    charged = q.abs() >= 0.3
+    if not bool(charged.any()):
+        return torch.zeros(c.X.shape[0], device=c.X.device)
+    idx = lambda letters, w: sum(w * c.probs[..., AA20.index(a)] for a in letters)
+    p_cat = idx("RK", 1.0) + idx("H", 0.5)                               # partners for anionic groups
+    p_an = idx("DE", 1.0) + idx("WYF", 0.5)                              # partners for cationic groups (incl. cation-pi)
+    ca = c.X[:, c.ca_idx]
+    cb = c.X[:, c.cb_idx] if c.cb_idx is not None else virtual_cb(ca)
+    u = cb - ca
+    site = cb + offset * u / u.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    Pc = c.P[:, charged]
+    w = ((r_on + ramp - torch.cdist(Pc, site)) / ramp).clamp(0.0, 1.0)  # [K, mc, nres]
+    comp = torch.where(q[charged][None, :, None] < 0, p_cat[:, None, :], p_an[:, None, :])
+    return (w * comp).sum(-1).clamp(max=1.0).mean(-1)
+
+
+def _compact(c: Ctx, **_):
     if c.ca_idx is None:
         return None
     ca = c.X[:, c.ca_idx]
@@ -217,14 +252,16 @@ def _compact(c: Ctx):
 
 TERMS = {
     "ptm_burial": _burial,
-    "ptm_contacts": lambda c: (c.n_p() / c.m.geometry.n_sat).clamp(max=1.0),
+    "ptm_contacts": lambda c, **_: (c.n_p() / c.m.geometry.n_sat).clamp(max=1.0),
     "peptide_overburial": _overburial,
-    "contact_share": lambda c: c.n_p() / (c.n_p() + c.n_q()).clamp_min(1e-6),
-    "clash": lambda c: -c.clash() / max(int(c.ptm.sum()), 1),
+    "contact_share": lambda c, **_: c.n_p() / (c.n_p() + c.n_q()).clamp_min(1e-6),
+    "clash": lambda c, **_: -c.clash() / max(int(c.ptm.sum()), 1),
     "solvation": _phys("dG_solv"),
     "electrostatics": _phys("E_elec"),
     "unsat_polar": _phys("unsat"),
     "compactness": _compact,
+    "ptm_close_contact": _close_contact,
+    "charge_partner": _charge_partner,
 }
 LEGACY_W = {"SOLV": "solvation", "ELEC": "electrostatics", "UNSAT": "unsat_polar"}
 
@@ -236,14 +273,14 @@ class RewardModel:
     physics: PhysicsTerms = field(default_factory=PhysicsTerms)
 
     def evaluate(self, X, ptm, other, binder, chem: PTMChem | None = None, ca_idx=None, cb_idx=None, bbpol_idx=None,
-                 probs=None, progress: float = 1.0) -> dict:
+                 probs=None, progress: float = 1.0, binder_all=None) -> dict:
         """Per-particle tensors: 'reward' (the weighted, scheduled, normalised sum at `progress`), every term's raw value
         under its name, the diagnostics n_ptm / n_other / clash / bur_ptm / bur_other."""
-        c = Ctx(self, X, ptm, other, binder, chem, ca_idx, cb_idx, bbpol_idx, probs)
+        c = Ctx(self, X, ptm, other, binder, chem, ca_idx, cb_idx, bbpol_idx, probs, binder_all)
         total = torch.zeros(X.shape[0], device=X.device)
         out = {}
         for t in self.terms:
-            v = TERMS[t.name](c)
+            v = TERMS[t.name](c, **t.params)
             if v is None:                                   # term needs data this batch does not have (e.g. chemistry)
                 continue
             out[t.name] = v
@@ -304,6 +341,10 @@ def load(env=None, generator: str = "rfd3") -> tuple[dict, RewardModel]:
         if env.get("PTMSMC_PHYSICS", "0") in ("1", "true", "yes"):
             specs += [TermSpec("solvation", physics.w_solv), TermSpec("electrostatics", physics.w_elec),
                       TermSpec("unsat_polar", physics.w_unsat)]
+    if generator == "rfd4":                                    # CA-only binder: closest CA to a PTM atom ~4 A
+        for sp in specs:
+            if sp.name == "ptm_close_contact":
+                sp.params.setdefault("close_d", 4.0)
     by = {s.name: s for s in specs}
     for k, v in env.items():                                 # PTMSMC_W_<TERM> weight overrides
         if k.startswith("PTMSMC_W_") and v not in (None, ""):
@@ -321,5 +362,5 @@ def load(env=None, generator: str = "rfd3") -> tuple[dict, RewardModel]:
 
 def describe(model: RewardModel) -> list[dict]:
     """JSON-able summary of the active terms (written into the run logs)."""
-    return [dict(name=t.name, weight=t.weight, schedule=vars(t.schedule), normalize=dict(vars(t.normalize)))
-            for t in model.terms]
+    return [dict(name=t.name, weight=t.weight, schedule=vars(t.schedule), normalize=dict(vars(t.normalize)),
+                 params=dict(t.params)) for t in model.terms]

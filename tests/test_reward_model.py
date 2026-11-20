@@ -116,3 +116,42 @@ def test_shipped_example_configs_load():
         pol, model = load({"PTMSMC_CONFIG": str(f)})
         ParticlePolicy.from_env({**pol, "PTMSMC_N_PARTICLES": "16"})          # every policy key is a real field
         assert model.terms and model.terms[0].name == "ptm_burial"
+
+
+def test_close_contact_and_charge_partner():
+    from ptm_rfd3.ptm_physics import AA20
+    K = 3
+    P = torch.zeros(K, 1, 3)
+    # one binder residue: CA 7.9 A away, CB pointing at the PTM atom -> charge centre 4.0 A from it
+    ca = torch.tensor([7.9, 0, 0]).expand(K, 1, 3)
+    cb = torch.tensor([6.4, 0, 0]).expand(K, 1, 3)
+    side = torch.stack([torch.tensor([[1.5, 0, 0]]), torch.tensor([[3.5, 0, 0]]), torch.tensor([[3.5, 0, 0]])])  # 1.5 A = overlap
+    X = torch.cat([P, ca, cb, side], 1)
+    L = X.shape[1]
+    m = lambda idx: torch.tensor([i in idx for i in range(L)])
+    probs = torch.zeros(K, 1, 20)
+    probs[0, 0, AA20.index("R")] = 1; probs[1, 0, AA20.index("R")] = 1; probs[2, 0, AA20.index("D")] = 1
+    chem = PTMChem.from_lists(["O"], [-1.0])
+    model = RewardModel([TermSpec("ptm_close_contact"), TermSpec("charge_partner")])
+    out = model.evaluate(X, m({0}), m(set()), m({1, 2}), chem=chem, ca_idx=torch.tensor([1]), cb_idx=torch.tensor([2]),
+                         probs=probs, binder_all=m({1, 2, 3}))
+    cc, cp = out["ptm_close_contact"], out["charge_partner"]
+    assert cc[0] < 0 and cc[1] == 0 and cc[2] == 0                       # only the 1.5 A side-chain atom overlaps
+    assert cp[1] == 1.0 and cp[2] == 0.0                                  # Arg next to an anion counts, Asp does not
+    neutral = model.evaluate(X, m({0}), m(set()), m({1, 2}), chem=PTMChem.from_lists(["C"], [0.0]),
+                             ca_idx=torch.tensor([1]), cb_idx=torch.tensor([2]), probs=probs)
+    assert torch.all(neutral["charge_partner"] == 0)                      # neutral PTM: inert
+    cation = model.evaluate(X, m({0}), m(set()), m({1, 2}), chem=PTMChem.from_lists(["N"], [1.0]),
+                            ca_idx=torch.tensor([1]), cb_idx=torch.tensor([2]), probs=probs)
+    assert cation["charge_partner"][2] == 1.0 and cation["charge_partner"][1] == 0.0   # Asp pairs with a cationic PTM
+
+
+def test_term_params_and_rfd4_close_d(tmp_path):
+    import json as _j
+    p = tmp_path / "c.json"
+    p.write_text(_j.dumps({"terms": [{"name": "ptm_burial"}, {"name": "ptm_close_contact", "weight": 0.5,
+                                                              "params": {"close_d": 3.0}}]}))
+    _, m = load({"PTMSMC_CONFIG": str(p)})
+    assert m.terms[1].params == {"close_d": 3.0}
+    _, m4 = load({"PTMSMC_TERMS": "ptm_burial:1,ptm_close_contact:0.5"}, generator="rfd4")
+    assert m4.terms[1].params == {"close_d": 4.0}
