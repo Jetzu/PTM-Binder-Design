@@ -33,11 +33,12 @@ CCD code or SMILES — and rank them by whether they prefer the **modified** ove
 2. [Quick start](#quick-start)
 3. [Specifying the target](#specifying-the-target) — [the modification](#the-modification) · [conditioning](#condition-on-it) · [more examples](#more-examples)
 4. [Running the funnel](#running-the-funnel) — [steps](#the-steps) · [what comes out](#what-comes-out) · [cheaper screening](#cheaper-screening----two-stage) · [seed confirmation](#always-confirm)
-5. [PTM-aware LigandMPNN](#ptm-aware-ligandmpnn) — [why a fork](#why-a-fork) · [use it standalone](#use-it-standalone) · [fine-tuned weights](#the-fine-tuned-weights) · [performance](#performance) · [in this pipeline](#in-this-pipeline)
-6. [Understanding the scores](#understanding-the-scores)
-7. [What was done & performance](#what-was-done--performance)
-8. [Troubleshooting & FAQ](#troubleshooting--faq)
-9. [Repository](#repository) · [Acknowledgements](#acknowledgements) · [License](#license)
+5. [RFD4 and particle guidance](#rfd4-and-particle-guidance) — [install](#install) · [RFD4 as the generator](#rfd4-as-the-generator) · [particle guidance](#particle-guidance-smc--weighted-ensemble) · [the config file](#the-config-file) · [choosing settings](#choosing-settings) · [status](#status)
+6. [PTM-aware LigandMPNN](#ptm-aware-ligandmpnn) — [why a fork](#why-a-fork) · [use it standalone](#use-it-standalone) · [fine-tuned weights](#the-fine-tuned-weights) · [performance](#performance) · [in this pipeline](#in-this-pipeline)
+7. [Understanding the scores](#understanding-the-scores)
+8. [What was done & performance](#what-was-done--performance)
+9. [Troubleshooting & FAQ](#troubleshooting--faq)
+10. [Repository](#repository) · [Acknowledgements](#acknowledgements) · [License](#license)
 
 ---
 
@@ -48,6 +49,8 @@ CCD code or SMILES — and rank them by whether they prefer the **modified** ove
 | `ptm-rfd3` + PTM-aware LigandMPNN | everything except RFD3 sampling and AF3 | CPU | this repository — steps 1 and 2 |
 | RFdiffusion3 | `ptm-rfd3 design` | 1 GPU | `pip install "rc-foundry[rfd3]"` — step 3 |
 | AlphaFold 3 | co-folding | 1 GPU | your AF3 install and weights from Google DeepMind — step 4 |
+| RFD4-Proteina *(optional)* | `rfd4_design.sbatch` (RFD4 as the generator) | 1 GPU | an RFD4-Proteina container — [RFD4 and particle guidance](#install) |
+| particle guidance *(optional)* | steering RFD3 / RFD4 sampling | same GPU | nothing extra: pure torch, runs inside the RFD3 / RFD4 environment |
 
 ### 1 · This repository
 Python ≥ 3.10 (tested with 3.12).
@@ -304,6 +307,167 @@ ptm-rfd3 confirm --scores seed_scores.csv --out confirmed.csv --n-seeds 5 --min-
 
 ---
 
+## RFD4 and particle guidance
+
+Two optional additions to the funnel above; both write their designs in the RFD3 output layout, so `ptm-rfd3 stage` and
+everything after it are unchanged.
+
+| Addition | What it does |
+|---|---|
+| **RFD4 as the generator** | the same PTM target (same builder, conformers and hotspot modes) is designed with [RFD4-Proteina](https://github.com/RosettaCommons/RFD4-Proteina) instead of RFD3; RFD4 co-designs the sequence, so `stage --keep-sequence` skips LigandMPNN |
+| **Particle guidance** | inference-time steering of RFD3 **or** RFD4 toward binders that **bury the modification**: K designs are sampled together and repeatedly re-weighted and resampled (SMC, weighted ensemble) by a reward computed on each design's predicted final structure. No model is changed; with nothing switched on the samplers run exactly as before |
+
+### Install
+- **Particle guidance**
+  - Nothing to install. It is part of `ptm_rfd3` and runs inside the RFD3 environment (torch comes with `rc-foundry`)
+    or inside the RFD4 container.
+  - Check: `pytest -q tests/test_particles.py tests/test_ptm_physics.py tests/test_reward_model.py` (CPU).
+- **RFD4**
+  - An RFD4-Proteina Apptainer image with the model bundle. Ours: `rfd4-proteina-cu128.sif`, which covers A5000 /
+    RTX 4090 / RTX 5090.
+  - `scripts/slurm/rfd4_design.sbatch` runs every step inside the container. Point it at the image and weights with
+    `RFD4_CONTAINER=<image.sif>` and `RFD4_WEIGHTS=<dir holding bundle/>`.
+  - This repository is bind-mounted and put on `PYTHONPATH`, so the container needs no extra packages (it already has
+    RDKit and biotite).
+  - Check: `pytest -q tests/test_rfd4_run.py` (CPU: spec → RFD4 condition spec, and RFD4 output → pipeline layout).
+
+### RFD4 as the generator
+```bash
+SPECS=examples/specs/egfr_pY1138.json OUTSUB=egfr_rfd4 LENGTHS=80,95,110 NREP=32 BS=16 \
+  sbatch scripts/slurm/rfd4_design.sbatch          # -> $PTM_RFD3_WORK/out/egfr_rfd4/run.tar (RFD3 layout, binder = chain A)
+ptm-rfd3 stage $PTM_RFD3_WORK/out/egfr_rfd4/run.tar --out STAGE4 --keep-sequence    # RFD4 sequences, no LigandMPNN
+```
+- **Inputs.** `python -m ptm_rfd3.rfd4_run inputs SPEC WORK` builds the modified target exactly as for RFD3. It then
+  writes one RFD4 condition spec per expanded spec and binder length, with:
+  - the target coordinates and sequence fixed (`C_CRD`, `C_SEQ`);
+  - the hotspots of the chosen hotspot mode as `C_HOT`;
+  - a **fixed** binder length (`LENGTHS`, default = midpoint of the contig range).
+- **How RFD4 sees the modification.** A modified residue that is in RFD4's vocabulary (PTR, SEP, TPO, ALY, M3L, …)
+  stays one residue token; anything else is atomised by RFD4.
+- **Collecting.** `python -m ptm_rfd3.rfd4_run collect` converts the outputs to `<spec>_b<population>_model_<i>`:
+  binder renamed to chain A, target chains to B, C, …, plus a clash count for the geometry gate.
+
+| `rfd4_design.sbatch` variable | Meaning [default] |
+|---|---|
+| `SPECS`, `OUTSUB`, `TAG` [`run`] | spec file, output folder, tar name (as for `rfd3_design.sbatch`) |
+| `LENGTHS` | comma-separated fixed binder lengths [midpoint of the contig range] |
+| `NREP` [8], `BS` [8], `SEED` [1] | designs per length, batch size (= particles per population with guidance; must divide `NREP`), seed |
+| `RFD4_CONTAINER`, `RFD4_WEIGHTS` | RFD4 image and weight directory |
+| `EXTRA` | more `rfd4-generate` hydra overrides |
+| `PTMSMC_*` | particle-guidance settings, forwarded into the container |
+
+### Particle guidance (SMC / weighted ensemble)
+Switch it on with one config file. Everything else stays as in the funnel.
+```bash
+# RFD3: the particle population is the diffusion batch (here 128 particles, run through the model 32 at a time)
+PTMSMC_CONFIG=examples/particle_guidance/burial_smc.yaml PTMSMC_CHUNK=32 \
+  ptm-rfd3 design ckpt_path=$RFD3_CKPT inputs=examples/specs/egfr_pY1138.json out_dir=OUT diffusion_batch_size=128 n_batches=3
+
+# RFD4: the population is the RFD4 batch
+PTMSMC_CONFIG=$PWD/examples/particle_guidance/burial_smc.yaml SPECS=examples/specs/egfr_pY1138.json OUTSUB=egfr_g \
+  LENGTHS=90 NREP=128 BS=128 sbatch scripts/slurm/rfd4_design.sbatch
+```
+**How it works**
+- **Hook.** A thin wrapper around each generator's denoiser call scores every particle on its predicted clean
+  structure. When the population is resampled, the sampler's own state is reindexed in place, so the sampler code is
+  untouched.
+- **Schemes.**
+  - `smc`: Feynman–Kac SMC with a tempered difference potential. It targets q(x)·exp(λ·R(x)), where q is the
+    generator's own distribution.
+  - `we`: weighted ensemble (split/merge within bins).
+  - `twe`: tilted weighted ensemble.
+  - `none`: score and log only.
+  - `fork`: diagnostic; duplicates every particle once to measure how late copies still diverge.
+- **Resampling needs noise.** Copies only diverge while the sampler still injects noise, and resampling is clamped to
+  that window. For RFD3 this ends at step ~158 of 199 with the default `gamma_min`.
+- **Fold diversity.** Optional and importance-corrected:
+  - SMC can draw offspring from a proposal that favours under-represented folds (`fold_dedup`, `fold_mix`); each child
+    carries the weight correction, so the target is unchanged.
+  - WE / tWE can use one bin per fold (`we_bin_by: fold`).
+  - Leave these off to tilt hardest.
+
+**Outputs**
+- Each design's metadata JSON gets a `ptmsmc` entry: its final weight, lineage (the initial particle it descends from)
+  and every reward term.
+- The full per-step log (rewards, weights, effective sample size (ESS), resampling events, fold clusters) is written to
+  `OUT/ptmsmc/<example>.ptmsmc.json`.
+
+### The config file
+`PTMSMC_CONFIG=file.yaml` (or `.json`). Every key is optional, and any value can be overridden from the environment:
+- `PTMSMC_<FIELD>`;
+- `PTMSMC_W_<TERM>=<weight>`;
+- `PTMSMC_TERMS="ptm_burial:1,clash:0.1"`.
+```yaml
+policy:   {scheme: smc, start: 0.55, lam_max: 80, cess_frac: 0.5, ess_frac: 0.5, chunk: 32}
+geometry: {mode: solid}                    # PTM burial as a solid-angle fraction
+terms:
+  - {name: ptm_burial, weight: 1.0}        # the primary term
+  - {name: clash, weight: 0.1}
+  - {name: ptm_close_contact, weight: 0.5, schedule: {start: 0.8, shape: linear}, params: {close_d: 2.6}}
+  - {name: charge_partner, weight: 0.5, schedule: {start: 0.8, shape: linear}}
+```
+Each term entry takes:
+- `weight`;
+- `schedule` over sampler progress p (0 = first step, 1 = final structure): `start`, `stop`, `shape`
+  (`const` / `linear` / `cosine` / `power` / `step`), `floor`, `hold`;
+- `normalize`: `none` / `scale` / `zscore`, `clip`;
+- `params`.
+
+Terms active at p = 1 define the target. Terms that are off at p = 1 only steer the path, and the importance weights
+correct for them.
+
+| Term | Higher is better: |
+|---|---|
+| `ptm_burial` | modification atoms enclosed by the binder (solid-angle fraction, or a saturating contact count) — **the primary term** |
+| `ptm_contacts`, `contact_share` | binder contacts on the modification; their share of all target contacts |
+| `peptide_overburial` | penalty when the rest of the target is buried more than the modification |
+| `ptm_close_contact` | penalty for binder atoms overlapping the modification (`params.close_d`) |
+| `charge_partner` | complementary charges next to charged modification atoms (Arg/Lys for anions; Asp/Glu, Trp/Tyr/Phe for cations); 0 for neutral PTMs |
+| `solvation`, `electrostatics`, `unsat_polar` | cheap PTM-general physics on the added atoms: Eisenberg–McLachlan solvation, screened electrostatics against the binder's predicted side-chain charges, buried polar atoms without a partner |
+| `clash`, `compactness` | target–binder clashes; binder radius of gyration |
+
+- **Modification atoms.** These are the atoms the modification **adds**, as detected by
+  `rfd3_inputs.detect_sites`: atoms not in the parent residue, plus the anchor.
+- **No phosphate-specific rules.** Charges come from each modification's own bond graph at pH 7. Checked against the
+  CCD: phospho −2, sulfo −1, methyl-Lys +1, acetyl-Lys / citrulline / GlcNAc 0.
+
+Starting configs: `examples/particle_guidance/burial_smc.yaml`, `burial_physics_scheduled.yaml`,
+`burial_we_fold.yaml`. Full reference: [`docs/particle_guidance.md`](docs/particle_guidance.md).
+
+### Choosing settings
+- **Scoring window.**
+  - Score only where the per-step reward already predicts the final one. A `scheme: none` run logs this for every
+    term.
+  - On RFD3 / EGFR pTyr1138, PTM burial reached ρ 0.8 at step ~120 of 199. Resampled copies only become different
+    folds before about that step.
+  - Side-chain-level terms (`ptm_close_contact`, `charge_partner`, `electrostatics`) only become predictive after
+    step ~160, once the default noise has ended. To steer on them, extend the noise (`EXTRA="inference_sampler.gamma_min=0.1"`)
+    and compare against stock RFD3 run with the same setting.
+- **Tilt strength.**
+  - Match `lam_max` to the reward's spread across particles; with burial spread ~0.08, λ ≤ 10 barely tilts.
+  - Adaptive tempering (`cess_frac`) limits how much a single step can reweight.
+- **Population size.**
+  - Use ~128 particles per population (`diffusion_batch_size` / `BS`).
+  - On RFD3, `PTMSMC_CHUNK` (`policy.chunk`) runs the denoiser in chunks so a large population fits in memory.
+
+### Status
+Research code.
+- **Tested:**
+  - the mechanics on CPU (`tests/`);
+  - GPU runs on the EGFR pTyr1138 example with RFD3 and RFD4.
+- **Measured:**
+  - Plain SMC on burial raises PTM burial but collapses to 1–2 folds. The fold-aware options keep 0.8–0.9 of stock
+    RFD3's fold diversity.
+  - At 96 designs per setting, no setting of burial-only steering has yet raised the pipeline's geometry-gate hit
+    rate over stock.
+  - Most designs fail that gate on a binder atom ≤ 2.4 Å from the modification, or a missing charge partner. These are
+    what the side-chain terms target.
+- **Treat it as experimental:**
+  - compare against unguided runs at the same compute;
+  - confirm designs with the usual AF3 modified-vs-unmodified screen.
+
+---
+
 ## PTM-aware LigandMPNN
 
 The sequence stage is a **fork of LigandMPNN that understands modified residues and covalently attached ligands**, plus a **PTM fine-tuned checkpoint**. It lives in
@@ -470,8 +634,9 @@ single-sequence MSAs (fine for peptide/loop targets; structured domains need `pt
 |---|---|
 | `ptm_rfd3/` | the package: RDKit PTM builder and ranker, RFD3 spec handling and bond patch, `stage`, scoring, seed confirmation, the `ptm-rfd3` CLI |
 | `LigandMPNN_PTM/` | PTM-aware LigandMPNN with the PTM fine-tuned checkpoint (own README) |
-| `scripts/` | `slurm/rfd3_design.sbatch`, `slurm/af3_batch.sbatch`, `af3/af3_batch.py` (token-bucketed AF3 driver) |
-| `examples/` | `egfr_tail_1126_1150.pdb` and ready-to-run specs in `specs/` |
+| `scripts/` | `slurm/rfd3_design.sbatch`, `slurm/rfd4_design.sbatch`, `slurm/af3_batch.sbatch`, `af3/af3_batch.py` (token-bucketed AF3 driver) |
+| `ptm_rfd3/particles.py`, `reward_model.py`, `ptm_physics.py`, `rfd3_particles.py`, `rfd4_particles.py`, `rfd4_run.py` | particle guidance (engine, multi-term reward, PTM physics, RFD3 / RFD4 hooks) and the RFD4 design stage — [RFD4 and particle guidance](#rfd4-and-particle-guidance) |
+| `examples/` | `egfr_tail_1126_1150.pdb`, ready-to-run specs in `specs/`, particle-guidance configs in `particle_guidance/` |
 
 
 ---
