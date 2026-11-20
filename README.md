@@ -424,6 +424,7 @@ correct for them.
 | `ptm_close_contact` | penalty for binder atoms overlapping the modification (`params.close_d`) |
 | `charge_partner` | complementary charges next to charged modification atoms (Arg/Lys for anions; Asp/Glu, Trp/Tyr/Phe for cations); 0 for neutral PTMs |
 | `solvation`, `electrostatics`, `unsat_polar` | cheap PTM-general physics on the added atoms: Eisenberg–McLachlan solvation, screened electrostatics against the binder's predicted side-chain charges, buried polar atoms without a partner |
+| `interface_contacts`, `peptide_burial` | binding the **peptide as a whole** (all target atoms, PTM included): fraction of target atoms in contact with the binder; their mean solid-angle burial — so designs are binders first |
 | `clash`, `compactness` | target–binder clashes; binder radius of gyration |
 
 - **Modification atoms.** These are the atoms the modification **adds**, as detected by

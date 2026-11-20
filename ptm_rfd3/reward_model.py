@@ -46,6 +46,10 @@ Terms (P = PTM atoms = atoms the modification adds, Q = other target atoms, B = 
   charge_partner      per charged P atom (|q| >= 0.3): sum_j p_j(complementary) * ramp(d(charge centre_j, a)), capped at
                       1, averaged over charged atoms; complementary = R/K (+0.5 H) for anions, D/E + 0.5 W/Y/F (aromatic
                       cage, cation-pi) for cations; 0 for neutral PTMs. params: r_on (full credit, 5.0 A), ramp (1.5 A).
+  interface_contacts  fraction of ALL target atoms (P and Q: the whole peptide) with a binder atom within d_on (soft, +ramp):
+                      rewards forming an interface with the peptide at all (RFD3 default d_on 6 A on N/CA/C/O/CB; RFD4 8 A
+                      on CA + virtual CB). params: d_on, ramp (1.5 A).
+  peptide_burial      mean solid-angle burial of ALL target atoms by the binder (enclosing the peptide, not just touching it)
 Every term takes optional `params: {...}` in the config (passed to the term function).
 """
 from __future__ import annotations
@@ -242,6 +246,17 @@ def _charge_partner(c: Ctx, r_on: float = 5.0, ramp: float = 1.5, offset: float 
     return (w * comp).sum(-1).clamp(max=1.0).mean(-1)
 
 
+def _interface_contacts(c: Ctx, d_on: float = 6.0, ramp: float = 1.5):
+    tgt = torch.cat([c.P, c.Q], 1)
+    dmin = torch.cdist(tgt, c.B).min(-1).values                       # [K, n_target]
+    return ((d_on + ramp - dmin) / ramp).clamp(0.0, 1.0).mean(-1)
+
+
+def _peptide_burial(c: Ctx, **_):
+    tgt = torch.cat([c.P, c.Q], 1)
+    return c.get("bt", lambda: c.m.geometry.solid_burial(tgt, c.B).mean(-1))
+
+
 def _compact(c: Ctx, **_):
     if c.ca_idx is None:
         return None
@@ -262,6 +277,8 @@ TERMS = {
     "compactness": _compact,
     "ptm_close_contact": _close_contact,
     "charge_partner": _charge_partner,
+    "interface_contacts": _interface_contacts,
+    "peptide_burial": _peptide_burial,
 }
 LEGACY_W = {"SOLV": "solvation", "ELEC": "electrostatics", "UNSAT": "unsat_polar"}
 
@@ -346,6 +363,8 @@ def load(env=None, generator: str = "rfd3") -> tuple[dict, RewardModel]:
         for sp in specs:
             if sp.name == "ptm_close_contact":
                 sp.params.setdefault("close_d", 4.0)
+            if sp.name == "interface_contacts":
+                sp.params.setdefault("d_on", 8.0)
     by = {s.name: s for s in specs}
     for k, v in env.items():                                 # PTMSMC_W_<TERM> weight overrides
         if k.startswith("PTMSMC_W_") and v not in (None, ""):

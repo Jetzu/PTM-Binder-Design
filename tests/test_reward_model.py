@@ -155,3 +155,22 @@ def test_term_params_and_rfd4_close_d(tmp_path):
     assert m.terms[1].params == {"close_d": 3.0}
     _, m4 = load({"PTMSMC_TERMS": "ptm_burial:1,ptm_close_contact:0.5"}, generator="rfd4")
     assert m4.terms[1].params == {"close_d": 4.0}
+
+
+def test_peptide_binding_terms():
+    torch.manual_seed(0)
+    K = 3
+    tgt = torch.stack([torch.arange(10.0) * 3.8, torch.zeros(10), torch.zeros(10)], -1)       # a 10-atom peptide
+    near = tgt + torch.tensor([0.0, 5.0, 0.0])                                               # binder alongside it
+    half = torch.cat([near[:5], near[5:] + torch.tensor([0, 40.0, 0])])                      # binder along half of it
+    far = near + torch.tensor([0.0, 60.0, 0.0])
+    X = torch.stack([torch.cat([tgt, b]) for b in (near, half, far)])
+    m = lambda a, b: torch.tensor([a <= i < b for i in range(20)])
+    model = RewardModel([TermSpec("interface_contacts"), TermSpec("peptide_burial")], BurialReward(mode="solid"))
+    out = model.evaluate(X, m(0, 1), m(1, 10), m(10, 20))
+    ic, pb = out["interface_contacts"], out["peptide_burial"]
+    # half: 5 atoms in contact + atom 5 at 6.28 A from the binder end, inside the 6.0-7.5 A ramp (0.81 credit)
+    assert ic[0] == 1.0 and abs(float(ic[1]) - (5 + (7.5 - (3.8 ** 2 + 25) ** 0.5) / 1.5) / 10) < 1e-4 and ic[2] == 0.0
+    assert pb[0] > pb[1] > pb[2] == 0.0
+    _, m4 = load({"PTMSMC_TERMS": "ptm_burial:1,interface_contacts:0.5"}, generator="rfd4")
+    assert m4.terms[1].params == {"d_on": 8.0}

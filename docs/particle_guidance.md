@@ -86,6 +86,8 @@ P are the atoms the modification adds, detected by `rfd3_inputs.detect_sites`: a
 | `electrostatics` | −E between the P charges and the binder's expected side-chain charges. Uses a distance-dependent dielectric (ε = 4r). Binder charges come from the per-step sequence prediction. |
 | `unsat_polar` | −(fraction of polar P atoms that are buried with no binder backbone N/O or polar side chain nearby) |
 | `compactness` | −max(0, Rg / (2.2·N^0.38) − 1) of the binder Cα atoms |
+| `interface_contacts` | fraction of **all** target atoms (the whole peptide, PTM included) with a binder atom within `d_on` (soft ramp; RFD3 6 Å on backbone + Cβ, RFD4 8 Å on Cα + virtual Cβ): binding the peptide at all |
+| `peptide_burial` | mean solid-angle burial of all target atoms by the binder |
 
 How P charges are assigned (`ptm_rfd3/ptm_physics.py`):
 - They come from each modification's own bond graph at pH 7, so no residue tables are involved.
