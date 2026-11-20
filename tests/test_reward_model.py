@@ -102,7 +102,7 @@ def test_config_file_and_env_overrides(tmp_path):
 
 def test_rfd4_geometry_defaults():
     _, m = load({}, generator="rfd4")
-    assert (m.geometry.r0, m.geometry.d0, m.geometry.ray_r) == (8.0, 3.8, 3.0)
+    assert (m.geometry.r0, m.geometry.d0, m.geometry.ray_r, m.geometry.mode) == (8.0, 3.8, 3.0, "solid")
 
 
 def test_shipped_example_configs_load():

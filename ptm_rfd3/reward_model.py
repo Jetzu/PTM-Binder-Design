@@ -317,7 +317,8 @@ def load(env=None, generator: str = "rfd3") -> tuple[dict, RewardModel]:
     unknown = set(cfg) - {"policy", "geometry", "physics", "terms"}
     if unknown:
         raise ValueError(f"PTMSMC_CONFIG: unknown sections {sorted(unknown)}")
-    geo = dict(r0=8.0, d0=3.8, n_sat=6.0, clash_d=3.0, ray_r=3.0) if generator == "rfd4" else {}   # CA-level geometry
+    # RFD4: binder = CA + virtual CB (no side chains while sampling) -> coarser geometry, solid-angle burial by default
+    geo = dict(mode="solid", r0=8.0, d0=3.8, n_sat=6.0, clash_d=3.0, ray_r=3.0) if generator == "rfd4" else {}
     geo.update(cfg.get("geometry") or {})
     for f in fields(BurialReward):
         v = env.get("PTMSMC_" + f.name.upper())

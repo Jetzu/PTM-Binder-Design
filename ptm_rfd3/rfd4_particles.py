@@ -145,16 +145,17 @@ class Geometry:
         self.info["ptm_charges"] = self.chem.charge.tolist() if self.chem is not None else None
 
     def terms(self, reward, bb_ca_nm: torch.Tensor, seq_logits: torch.Tensor | None, progress: float = 1.0):
-        X, P, Q, B = self.assemble(bb_ca_nm)
+        X, P, Q, B, CA, CB = self.assemble(bb_ca_nm)
         probs = None
         if torch.is_tensor(seq_logits) and seq_logits.ndim == 3:
             probs = torch.softmax(seq_logits[..., 1:21].float(), -1).index_select(1, self.binder_tok.to(seq_logits.device))
-        ca_idx = B.nonzero().flatten()                                       # binder CA in token order
-        return reward.evaluate(X, P, Q, B, chem=self.chem, ca_idx=ca_idx, cb_idx=None, bbpol_idx=None, probs=probs,
-                               progress=progress)
+        return reward.evaluate(X, P, Q, B, chem=self.chem, ca_idx=CA.nonzero().flatten(), cb_idx=CB.nonzero().flatten(),
+                               bbpol_idx=None, probs=probs, progress=progress)
 
     def assemble(self, bb_ca_nm: torch.Tensor):
-        """bb_ca [K, n, 3] in nm -> X [K, m, 3] Angstrom with masks (ptm, other, binder) over m."""
+        """bb_ca [K, n, 3] in nm -> X [K, m, 3] Angstrom and masks over m: ptm, other, binder (CA + virtual CB), binder
+        CA, binder virtual CB (token order). The virtual CB (ptm_physics.virtual_cb, from the CA trace) doubles the
+        density of the binder shell for burial / close contact and gives the side-chain direction to the physics terms."""
         X = 10.0 * bb_ca_nm.detach().float()
         parts, kinds = [], []
         if self.ptm_ref is not None:
@@ -163,9 +164,13 @@ class Geometry:
         if bool(self.ptm_atomized.any()):
             parts.append(X[:, self.ptm_atomized]); kinds.append(0)
         parts.append(X[:, self.other]); kinds.append(1)
-        parts.append(X[:, self.binder]); kinds.append(2)
+        from .ptm_physics import virtual_cb
+
+        ca = X[:, self.binder]
+        parts.append(ca); kinds.append(2)
+        parts.append(virtual_cb(ca)); kinds.append(3)
         lab = torch.cat([torch.full((p.shape[1],), k, dtype=torch.long) for p, k in zip(parts, kinds)]).to(X.device)
-        return torch.cat(parts, 1), lab == 0, lab == 1, lab == 2
+        return torch.cat(parts, 1), lab == 0, lab == 1, (lab == 2) | (lab == 3), lab == 2, lab == 3
 
 
 def install() -> None:
@@ -211,7 +216,7 @@ def install() -> None:
             if not engine.wants_score(state["kw"] - 1):
                 return nn_out
             tt = geom.terms(reward, nn_out["bb_ca"]["x_1"], nn_out.get("sequence", {}).get("logits"), progress=progress)
-            Xg, Pm, _Qm, Bm = geom.assemble(nn_out["bb_ca"]["x_1"])
+            Xg, Pm, _Qm, _Bm, Bm, _CBm = geom.assemble(nn_out["bb_ca"]["x_1"])
             cl = fold_clusters(Xg[:, Bm], Xg[:, Pm], engine.policy.fold_thr)
             parents = engine.score(tt["reward"], progress, step=step, clusters=cl)
             engine.log[-1]["terms"] = {k: [round(float(v_), 4) for v_ in v.detach().cpu().flatten()]
